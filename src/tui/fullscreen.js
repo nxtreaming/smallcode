@@ -182,8 +182,8 @@ class FullScreenTUI {
     // Store a direct reference to the real stdout.write (before any overrides)
     this._rawWrite = process.stdout.write.bind(process.stdout);
 
-    // Enter alternate buffer + raw mode + enable mouse SGR reporting
-    this._rawWrite(ANSI.enterAlt + ANSI.hideCursor + '\x1b[?1006h');
+    // Enter alternate buffer + raw mode + enable mouse SGR reporting + bracketed paste
+    this._rawWrite(ANSI.enterAlt + ANSI.hideCursor + '\x1b[?1006h' + '\x1b[?2004h');
     process.stdin.setRawMode(true);
     process.stdin.resume();
 
@@ -200,7 +200,7 @@ class FullScreenTUI {
   leave() {
     this.active = false;
     const write = this._rawWrite || process.stdout.write.bind(process.stdout);
-    write(ANSI.showCursor + '\x1b[?1006l' + ANSI.leaveAlt + ANSI.reset);
+    write(ANSI.showCursor + '\x1b[?1006l' + '\x1b[?2004l' + ANSI.leaveAlt + ANSI.reset);
     process.stdin.setRawMode(false);
     process.stdin.pause();
   }
@@ -508,6 +508,21 @@ class FullScreenTUI {
   async _onKeypress(data) {
     const key = data.toString();
 
+    // Bracketed paste detection — strip paste markers and handle as text
+    if (key.includes('\x1b[200~')) {
+      const cleaned = key.replace(/\x1b\[200~/g, '').replace(/\x1b\[201~/g, '');
+      if (cleaned.length > 0) {
+        const printable = cleaned.split('').filter(c => c.charCodeAt(0) >= 32 || c === '\n').join('');
+        // Replace newlines with spaces for single-line input
+        const text = printable.replace(/\n/g, ' ');
+        this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + text + this.inputBuffer.slice(this.inputCursor);
+        this.inputCursor += text.length;
+        this.commandPaletteOpen = this.inputBuffer.startsWith('/');
+        this.render();
+      }
+      return;
+    }
+
     // Ctrl+C — exit
     if (key === '\x03') {
       this.leave();
@@ -659,20 +674,25 @@ class FullScreenTUI {
       return;
     }
 
-    // Regular character
-    if (key.length === 1 && key.charCodeAt(0) >= 32) {
-      this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + key + this.inputBuffer.slice(this.inputCursor);
-      this.inputCursor++;
+    // Regular character or paste (multiple characters at once)
+    if (key.length >= 1 && !key.startsWith('\x1b')) {
+      // Filter to printable characters only
+      const printable = key.split('').filter(c => c.charCodeAt(0) >= 32);
+      if (printable.length > 0) {
+        const text = printable.join('');
+        this.inputBuffer = this.inputBuffer.slice(0, this.inputCursor) + text + this.inputBuffer.slice(this.inputCursor);
+        this.inputCursor += text.length;
 
-      // Open command palette when / is the first character
-      if (this.inputBuffer.startsWith('/')) {
-        this.commandPaletteOpen = true;
-        this.commandPaletteSelection = 0;
-      } else {
-        this.commandPaletteOpen = false;
+        // Open command palette when / is the first character
+        if (this.inputBuffer.startsWith('/')) {
+          this.commandPaletteOpen = true;
+          this.commandPaletteSelection = 0;
+        } else {
+          this.commandPaletteOpen = false;
+        }
+
+        this.render();
       }
-
-      this.render();
     }
   }
 

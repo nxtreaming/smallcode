@@ -40,25 +40,20 @@ SmallCode includes [BoneScript](https://github.com/Doorman11991/BoneScript) and 
 
 ### Configuration
 
-Edit `smallcode.toml` in your project root:
+Create a `.env` file in your project root:
 
-```toml
-[model]
-provider = "openai"
-name = "your-model-name"
-# baseUrl defaults to http://localhost:1234/v1 (LM Studio)
-
-[escalation]
-# Optional: auto-escalate to cloud model on hard fail
-# provider = "anthropic"
-# api_key = "sk-ant-..."
-```
-
-Or set environment variables:
 ```bash
-export OLLAMA_HOST=http://localhost:11434
-export ANTHROPIC_API_KEY=sk-ant-...  # optional, for escalation
+# Required
+SMALLCODE_MODEL=your-model-name
+SMALLCODE_BASE_URL=http://localhost:1234/v1
+
+# Optional: escalation (auto-fallback to cloud on hard fail)
+# ANTHROPIC_API_KEY=sk-ant-...
+# OPENAI_API_KEY=sk-...
+# DEEPSEEK_API_KEY=sk-...
 ```
+
+See `.env.example` for all options. Also supports `smallcode.toml` for backwards compatibility.
 
 ## Architecture
 
@@ -119,33 +114,6 @@ Per-model configuration: context length, tool format (native/hermes/json/xml/tex
 ### Working Memory
 Persistent scratchpad that survives across turns. Compensates for limited reasoning depth — the model can write notes to itself.
 
-## Configuration
-
-Project-level `smallcode.toml`:
-
-```toml
-[model]
-provider = "openai"
-name = "gemma-4-e4b"
-
-[context]
-max_budget_pct = 70
-working_memory_tokens = 500
-summary_threshold = 200
-
-[tools]
-enabled = ["read_file", "write_file", "patch", "bash", "search", "find_files", "symbols", "memory", "plan"]
-bash_timeout = 30
-
-[planner]
-auto_plan = true
-max_retries = 2
-validate_after_edit = true
-
-[tui]
-show_token_usage = true
-auto_approve = false
-```
 
 ## Commands
 

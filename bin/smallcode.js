@@ -315,108 +315,75 @@ EXAMPLES:
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 function loadConfig() {
-  const defaults = {
-    model: { provider: 'openai', name: '', baseUrl: 'http://localhost:1234/v1' },
-    context: { max_budget_pct: 70, working_memory_tokens: 500, summary_threshold: 200 },
-    tools: { bash_timeout: 30 },
-    tui: { show_token_usage: true, auto_approve: false },
-    escalation: { enabled: true, max_per_session: 5, confirm: true, provider: null, api_key: null, model: null },
-    git: { auto_commit: false },
+  const env = process.env;
+
+  const config = {
+    model: {
+      provider: env.SMALLCODE_PROVIDER || 'openai',
+      name: env.SMALLCODE_MODEL || '',
+      baseUrl: env.SMALLCODE_BASE_URL || env.OLLAMA_HOST ? (env.OLLAMA_HOST + '/v1') : 'http://localhost:1234/v1',
+    },
+    context: {
+      max_budget_pct: parseInt(env.SMALLCODE_CONTEXT_BUDGET) || 70,
+      working_memory_tokens: 500,
+      summary_threshold: 200,
+    },
+    tools: {
+      bash_timeout: parseInt(env.SMALLCODE_BASH_TIMEOUT) || 30,
+    },
+    tui: {
+      show_token_usage: true,
+      auto_approve: env.SMALLCODE_AUTO_APPROVE === 'true',
+      theme: env.SMALLCODE_THEME || 'dark',
+    },
+    escalation: {
+      enabled: true,
+      max_per_session: parseInt(env.SMALLCODE_ESCALATION_MAX) || 5,
+      confirm: env.SMALLCODE_ESCALATION_CONFIRM !== 'false',
+      provider: null,
+      api_key: null,
+      model: env.SMALLCODE_ESCALATION_MODEL || null,
+    },
+    git: {
+      auto_commit: env.SMALLCODE_AUTO_COMMIT === 'true',
+    },
   };
 
-  // Load smallcode.toml from project root or ~/.config/smallcode/
-  const tomlPaths = [
-    path.join(process.cwd(), 'smallcode.toml'),
-    path.join(process.cwd(), '.smallcode', 'config.toml'),
-    path.join(os.homedir(), '.config', 'smallcode', 'config.toml'),
-  ];
-
-  for (const tomlPath of tomlPaths) {
-    if (fs.existsSync(tomlPath)) {
-      try {
-        const content = fs.readFileSync(tomlPath, 'utf-8');
-        const parsed = parseToml(content);
-        // Merge parsed config over defaults
-        if (parsed.model) Object.assign(defaults.model, parsed.model);
-        if (parsed.context) Object.assign(defaults.context, parsed.context);
-        if (parsed.tools) Object.assign(defaults.tools, parsed.tools);
-        if (parsed.tui) Object.assign(defaults.tui, parsed.tui);
-        if (parsed.escalation) Object.assign(defaults.escalation, parsed.escalation);
-        if (parsed.git) Object.assign(defaults.git, parsed.git);
-        if (parsed.models) defaults.models = parsed.models;
-        break; // Use first found config
-      } catch (e) {
-        // Silently skip broken config
-      }
-    }
+  // Multi-model routing (optional)
+  if (env.SMALLCODE_MODEL_FAST || env.SMALLCODE_MODEL_STRONG) {
+    config.models = {
+      fast: env.SMALLCODE_MODEL_FAST || config.model.name,
+      default: env.SMALLCODE_MODEL_DEFAULT || config.model.name,
+      strong: env.SMALLCODE_MODEL_STRONG || config.model.name,
+    };
   }
 
-  // Environment variables override config file
-  if (process.env.SMALLCODE_BASE_URL) defaults.model.baseUrl = process.env.SMALLCODE_BASE_URL;
-  if (process.env.SMALLCODE_MODEL) defaults.model.name = process.env.SMALLCODE_MODEL;
-  if (process.env.OLLAMA_HOST) defaults.model.baseUrl = process.env.OLLAMA_HOST + '/v1';
+  // Legacy: still check smallcode.toml for backwards compatibility
+  const tomlPath = path.join(process.cwd(), 'smallcode.toml');
+  if (fs.existsSync(tomlPath) && !config.model.name) {
+    try {
+      const content = fs.readFileSync(tomlPath, 'utf-8');
+      const lines = content.split('\n');
+      for (const line of lines) {
+        const m = line.match(/^name\s*=\s*"?([^"#]+)"?/);
+        if (m) config.model.name = m[1].trim();
+        const b = line.match(/^baseUrl\s*=\s*"?([^"#]+)"?/);
+        if (b) config.model.baseUrl = b[1].trim();
+        const p = line.match(/^provider\s*=\s*"?([^"#]+)"?/);
+        if (p) config.model.provider = p[1].trim();
+      }
+    } catch {}
+  }
 
   // CLI flags override everything
-  if (flags.model) defaults.model.name = flags.model;
-  if (flags.provider) defaults.model.provider = flags.provider;
+  if (flags.model) config.model.name = flags.model;
+  if (flags.provider) config.model.provider = flags.provider;
+  if (flags.classic) config.tui.classic = true;
 
-  return defaults;
+  return config;
 }
 
-// Simple TOML parser (handles [sections], key = "value", key = number, key = bool)
-function parseToml(content) {
-  const result = {};
-  let currentSection = null;
 
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-
-    // Section header
-    const sectionMatch = trimmed.match(/^\[(.+)\]$/);
-    if (sectionMatch) {
-      currentSection = sectionMatch[1];
-      if (!result[currentSection]) result[currentSection] = {};
-      continue;
-    }
-
-    // Key = value
-    const kvMatch = trimmed.match(/^(\w+)\s*=\s*(.+)$/);
-    if (kvMatch) {
-      const key = kvMatch[1];
-      let value = kvMatch[2].trim();
-
-      // Strip inline comments (# after value, but not inside strings)
-      if (!value.startsWith('"') && !value.startsWith("'") && !value.startsWith('[')) {
-        const commentIdx = value.indexOf('#');
-        if (commentIdx > 0) value = value.slice(0, commentIdx).trim();
-      }
-
-      // Parse value type
-      if (value.startsWith('"') && value.endsWith('"')) {
-        value = value.slice(1, -1); // String
-      } else if (value.startsWith("'") && value.endsWith("'")) {
-        value = value.slice(1, -1); // String
-      } else if (value === 'true') {
-        value = true;
-      } else if (value === 'false') {
-        value = false;
-      } else if (!isNaN(value)) {
-        value = Number(value);
-      } else if (value.startsWith('[') && value.endsWith(']')) {
-        // Simple array: ["a", "b", "c"]
-        value = value.slice(1, -1).split(',').map(s => s.trim().replace(/^["']|["']$/g, ''));
-      }
-
-      if (currentSection) {
-        result[currentSection][key] = value;
-      } else {
-        result[key] = value;
-      }
-    }
-  }
-  return result;
-}
 
 // ─── Ollama Check ────────────────────────────────────────────────────────────
 
